@@ -1,0 +1,15 @@
+{
+  "name": "restaurant-qr-app",
+  "version": "1.0.0",
+  "description": "App de pedidos por QR desde la mesa con perfiles: cliente, mesero, cocinero, cajero, encargado y dueño",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --use-system-ca server.js",
+    "sheet:export": "node scripts/gen-sheet-datos.js",
+    "sheet:push": "cd apps-script && clasp push -f"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4"
+  }
+}

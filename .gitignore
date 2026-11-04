@@ -1,0 +1,7 @@
+node_modules/
+data/db.json
+nohup.out
+.freebuff/
+.agents/
+*.log
+.env
