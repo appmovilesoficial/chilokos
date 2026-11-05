@@ -1,6 +1,10 @@
 /**
  * Endpoints de Chilokos (porte fiel de server.js).
+ *
+ * Apps Script evalúa los archivos en orden alfabético: este archivo (Api.gs)
+ * corre antes que Codigo.gs, así que la lista de rutas se inicializa aquí.
  */
+var ROUTES = ROUTES || [];
 
 var D = function () { return db(); };
 
@@ -567,36 +571,3 @@ apiRoute_('GET', '/api/reports/summary', [auth, soloReportes, function (req, res
   });
 }]);
 
-/* ---------------- Tasa del euro (BCV) ---------------- */
-var MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
-  'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-var DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-
-function legible(fechaValor) {
-  if (!fechaValor) return null;
-  var partes = fechaValor.split('-');
-  var y = Number(partes[0]), m = Number(partes[1]), d = Number(partes[2]);
-  var dow = new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay();
-  return DIAS[dow] + ' ' + d + ' de ' + MESES[m - 1] + ' de ' + y;
-}
-
-apiRoute_('GET', '/api/rates/euro', [function (req, res) {
-  try {
-    var applied = getAppliedRate();
-    if (!applied) {
-      return res.json({ ok: false, tasa: null, error: (D().eur && D().eur.lastError) || 'Sin tasa disponible aún' });
-    }
-    res.json({
-      ok: true,
-      tasa: applied.tasa,
-      fechaValor: applied.fechaValor,
-      fechaValorLegible: legible(applied.fechaValor),
-      regla: applied.regla,
-      fuente: 'BCV — Banco Central de Venezuela',
-      actualizado: D().eur.lastOk || null,
-      error: D().eur.lastError || null,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, tasa: null, error: String((e && e.message) || e) });
-  }
-}]);

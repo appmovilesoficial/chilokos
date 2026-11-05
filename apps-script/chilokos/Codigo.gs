@@ -2,8 +2,8 @@
  * Chilokos - API en la nube (Google Apps Script)
  *
  * Este proyecto reemplaza al servidor Node (server.js) cuando la app se
- * publica en GitHub Pages. Guarda la base de datos en un archivo JSON de
- * Google Drive del dueño y expone los mismos endpoints que server.js.
+ * publica en GitHub Pages. La base de datos vive en PropertiesService (sin
+ * permisos de Google) y expone los mismos endpoints que server.js.
  */
 
 // URL publica del frontend (GitHub Pages). Se usa para los codigos QR.
@@ -12,9 +12,11 @@ var SITE_URL = 'https://appmovilesoficial.github.io/chilokos';
 var SESSION_TTL = 24 * 60 * 60 * 1000;
 
 /* ---------------- Router minimo (estilo Express) ---------------- */
-var ROUTES = [];
+// Api.gs inicializa y llena esta lista (corre antes que este archivo).
+ROUTES = ROUTES || [];
 
 function apiRoute_(method, path, handlers) {
+  ROUTES = ROUTES || [];
   ROUTES.push({ method: method, path: path, handlers: handlers });
 }
 

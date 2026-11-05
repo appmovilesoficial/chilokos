@@ -1,13 +1,19 @@
 /**
- * Base de datos en Google Drive (un archivo JSON del dueño del script).
- * Los datos se leen de CacheService cuando es posible para responder rapido.
+ * Base de datos en Google Apps Script (sin permisos de Google).
+ *
+ * Usa PropertiesService (almacenamiento propio del script) troceado en
+ * bloques de 8 KB, con CacheService para lecturas rápidas. No usa Drive ni
+ * UrlFetchApp, por lo que el web app queda accesible para cualquiera sin
+ * pasar por la pantalla de autorización de Google.
  */
 
 var DB_VERSION = 2;
-var DB_FILE_NAME = 'chilokos-db.json';
-var DB_PROP_ID = 'CHILOKOS_DB_FILE_ID';
-var DB_CACHE_KEY = 'chilokos_db_cache_v1';
-var DB_CACHE_MAX = 95000;   // limite seguro de CacheService (~100 KB por clave)
+var DB_PREFIX = 'CHILOKOS_DB_';
+var DB_CHUNKS_KEY = 'CHILOKOS_DB_CHUNKS';
+var DB_CACHE_KEY = 'chilokos_db_cache_v2';
+var DB_CACHE_MAX = 95000;    // límite seguro de CacheService (~100 KB por clave)
+var DB_CHUNK_SIZE = 8000;    // límite por propiedad del script (~9 KB)
+var DB_MAX_BYTES = 430000;   // límite total de PropertiesService (~500 KB)
 
 var _dbCache = null;
 var _dirty = false;
@@ -85,46 +91,65 @@ function seed() {
     notifications: [],
     sessions: {},
     counters: { order: 1 },
-    eur: { pubs: [] },
     createdAt: now,
   };
 }
 
-/* ---------------- Archivo en Drive ---------------- */
-function dbFile_() {
-  var props = PropertiesService.getScriptProperties();
-  var id = props.getProperty(DB_PROP_ID);
-  if (id) {
-    try { return DriveApp.getFileById(id); } catch (e) { /* se recrea abajo */ }
+/* ---------------- Lectura / escritura troceada ---------------- */
+function readDbRaw_() {
+  var cache = CacheService.getScriptCache();
+  try {
+    var cached = cache.get(DB_CACHE_KEY);
+    if (cached) return cached;
+  } catch (e) { /* cache opcional */ }
+
+  var props = PropertiesService.getScriptProperties().getProperties();
+  var total = Number(props[DB_CHUNKS_KEY] || 0);
+  if (!total) return null;
+  var partes = [];
+  for (var i = 0; i < total; i++) {
+    var trozo = props[DB_PREFIX + i];
+    if (trozo == null) return null;
+    partes.push(trozo);
   }
-  var found = DriveApp.getFilesByName(DB_FILE_NAME);
-  if (found.hasNext()) {
-    var f = found.next();
-    props.setProperty(DB_PROP_ID, f.getId());
-    return f;
+  return partes.join('');
+}
+
+function writeDbRaw_(json) {
+  var propsService = PropertiesService.getScriptProperties();
+  var prevTotal = Number(propsService.getProperty(DB_CHUNKS_KEY) || 0);
+  var trozos = [];
+  for (var i = 0; i < json.length; i += DB_CHUNK_SIZE) {
+    trozos.push(json.slice(i, i + DB_CHUNK_SIZE));
   }
-  var nuevo = seed();
-  var file = DriveApp.createFile(DB_FILE_NAME, JSON.stringify(nuevo), MimeType.PLAIN_TEXT);
-  props.setProperty(DB_PROP_ID, file.getId());
-  return file;
+  var valores = {};
+  for (var j = 0; j < trozos.length; j++) {
+    valores[DB_PREFIX + j] = trozos[j];
+  }
+  valores[DB_CHUNKS_KEY] = String(trozos.length);
+  propsService.setProperties(valores, false);
+  if (prevTotal > trozos.length) {
+    var sobrantes = [];
+    for (var k = trozos.length; k < prevTotal; k++) sobrantes.push(DB_PREFIX + k);
+    propsService.deleteProperties(sobrantes);
+  }
+  try {
+    if (json.length < DB_CACHE_MAX) {
+      CacheService.getScriptCache().put(DB_CACHE_KEY, json, 21600);
+    } else {
+      CacheService.getScriptCache().remove(DB_CACHE_KEY);
+    }
+  } catch (e) { /* la cache es opcional */ }
 }
 
 function loadDb_() {
   if (_dbCache) return _dbCache;
 
-  var cache = CacheService.getScriptCache();
-  var raw = cache.get(DB_CACHE_KEY);
   var db = null;
-
+  var raw = readDbRaw_();
   if (raw) {
     try { db = JSON.parse(raw); } catch (e) { db = null; }
   }
-  if (!db) {
-    var file = dbFile_();
-    var txt = file.getBlob().getDataAsString();
-    try { db = JSON.parse(txt); } catch (e) { db = null; }
-  }
-
   if (!db) {
     db = seed();
     _dirty = true;
@@ -133,7 +158,6 @@ function loadDb_() {
   db.notifications = db.notifications || [];
   db.sessions = db.sessions || {};
   db.counters = db.counters || { order: 1 };
-  db.eur = db.eur || { pubs: [] };
   if (!db.version || db.version < DB_VERSION) {
     db.menu = carta();
     db.version = DB_VERSION;
@@ -154,22 +178,45 @@ function save() { _dirty = true; }
 
 function isDirty_() { return _dirty; }
 
+/**
+ * Si la base crece demasiado, elimina los pedidos cerrados más antiguos.
+ * Devuelve true si hubo recorte.
+ */
+function shrinkDb_(db) {
+  var cerrados = db.orders
+    .filter(function (o) { return o.status === 'pagado' || o.status === 'cancelado'; })
+    .sort(function (a, b) { return a.createdAt - b.createdAt; });
+
+  var recortado = false;
+  while (cerrados.length && JSON.stringify(db).length > DB_MAX_BYTES) {
+    var viejo = cerrados.shift();
+    var idx = db.orders.indexOf(viejo);
+    if (idx !== -1) { db.orders.splice(idx, 1); recortado = true; }
+  }
+  return recortado;
+}
+
 function commitDb_() {
   var db = _dbCache || loadDb_();
   var json = JSON.stringify(db);
-  try {
-    dbFile_().setContent(json);
-  } catch (e) {
-    // si falla la escritura, se intenta en la proxima peticion
-    return;
+
+  if (json.length > DB_MAX_BYTES) {
+    shrinkDb_(db);
+    json = JSON.stringify(db);
   }
+
   try {
-    if (json.length < DB_CACHE_MAX) {
-      CacheService.getScriptCache().put(DB_CACHE_KEY, json, 21600);
-    } else {
-      CacheService.getScriptCache().remove(DB_CACHE_KEY);
+    writeDbRaw_(json);
+  } catch (e) {
+    // Cuota llena: recorta pedidos viejos y reintenta una vez.
+    shrinkDb_(db);
+    json = JSON.stringify(db);
+    try {
+      writeDbRaw_(json);
+    } catch (e2) {
+      return; // se reintenta en la próxima petición
     }
-  } catch (e) { /* la cache es opcional */ }
+  }
   _dirty = false;
 }
 

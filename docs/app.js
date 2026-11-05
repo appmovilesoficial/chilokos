@@ -62,7 +62,7 @@ async function api(path, { method = 'GET', body } = {}) {
   const [pathname, search] = String(path).split('?');
   const qs = new URLSearchParams(search || '');
   qs.set('path', '/api' + pathname);
-  if (method !== 'GET') qs.set('_method', method);
+  qs.set('_method', method);                        // todas viajan como POST (sin preflight CORS)
   if (S.token) qs.set('token', S.token);
 
   const res = await fetch(API_BASE + '?' + qs.toString(), {
@@ -1305,11 +1305,60 @@ function stopPoll() { if (S.poll) clearInterval(S.poll); S.poll = null; }
 
 window.addEventListener('hashchange', () => route().catch(e => toast(e.message, 'err')));
 
-async function loadRate() {
+/* ---------------- Tasa del euro del BCV (consultada desde el navegador) ---------------- */
+const RATE_CACHE_KEY = 'chilokos_rate_v1';
+const RATE_TTL = 6 * 60 * 60 * 1000;
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+  'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+function fechaLegible(iso) {
+  if (!iso) return null;
+  const [y, m, d] = String(iso).split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const dow = new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay();
+  return `${DIAS[dow]} ${d} de ${MESES[m - 1]} de ${y}`;
+}
+
+async function fetchBcvEuro() {
+  const [euro, dolar] = await Promise.all([
+    fetch('https://ve.dolarapi.com/v1/euros/oficial').then(r => r.json()),
+    fetch('https://ve.dolarapi.com/v1/dolares/oficial').then(r => r.json()).catch(() => null),
+  ]);
+  let tasa = Number(euro && euro.promedio);
+  const usd = Number(dolar && dolar.promedio);
+  // La API a veces devuelve "1.006" cuando el BCV publica "1.006,03" (miles).
+  if (Number.isFinite(tasa) && tasa > 0 && tasa < 50) tasa *= 1000;
+  if (!Number.isFinite(tasa) || tasa <= 0) return null;
+  // Cordura: el euro debe moverse en un rango razonable frente al dólar.
+  if (Number.isFinite(usd) && usd > 100 && (tasa < usd * 0.5 || tasa > usd * 2)) return null;
+  const fechaValor = String((euro && euro.fechaActualizacion) || '').slice(0, 10) || null;
+  return {
+    tasa,
+    fechaValor,
+    fechaValorLegible: fechaLegible(fechaValor),
+    regla: 'tasa oficial del BCV',
+    fuente: 'BCV — Banco Central de Venezuela',
+    actualizado: Date.now(),
+  };
+}
+
+async function loadRate(force) {
+  let cache = null;
+  try { cache = JSON.parse(localStorage.getItem(RATE_CACHE_KEY) || 'null'); } catch (e) { cache = null; }
+  if (!force && cache && cache.tasa && Date.now() - (cache.at || 0) < RATE_TTL) {
+    RATE = cache;
+    return;
+  }
   try {
-    const r = await api('/rates/euro');
-    if (r && r.tasa) RATE = r;
-  } catch (e) { /* se conserva la última tasa conocida */ }
+    const r = await fetchBcvEuro();
+    if (r) {
+      RATE = r;
+      localStorage.setItem(RATE_CACHE_KEY, JSON.stringify({ ...r, at: Date.now() }));
+      return;
+    }
+  } catch (e) { /* sin red o API caída: se conserva la última tasa */ }
+  if (cache && cache.tasa) RATE = cache;
 }
 
 (async function init() {
