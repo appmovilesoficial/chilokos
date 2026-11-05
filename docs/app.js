@@ -989,7 +989,13 @@ async function act(action, el, ev) {
       break;
     }
     case 'logout': {
-      
+      await api('/logout', { method: 'POST' }).catch(() => {});
+      clearSession();
+      stopPoll();
+      location.hash = '';
+      renderLogin();
+      break;
+    }
 
     /* ---- navegación ---- */
     case 'tab': S.tab = el.dataset.tab; render(); break;
