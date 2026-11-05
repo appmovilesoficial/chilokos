@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 const SESSION_TTL = 24 * 60 * 60 * 1000;   // 24 h: las sesiones y llamados viejos se descartan
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'docs')));
 
 const D = () => db();
 
