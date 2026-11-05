@@ -5,3 +5,6 @@ nohup.out
 .agents/
 *.log
 .env
+apps-script/Datos.js
+apps-script/.clasp.json
+apps-script/chilokos/.clasp.json

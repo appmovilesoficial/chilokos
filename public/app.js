@@ -55,22 +55,40 @@ function ago(ts) {
   return `hace ${Math.floor(m / 60)} h`;
 }
 
-/* ---------------- API ---------------- */
+/* ---------------- API (Google Apps Script) ---------------- */
+const API_BASE = window.CHILOKOS_API || '';
+
 async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch('/api' + path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(S.token ? { Authorization: 'Bearer ' + S.token } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
+  const [pathname, search] = String(path).split('?');
+  const qs = new URLSearchParams(search || '');
+  qs.set('path', '/api' + pathname);
+  if (method !== 'GET') qs.set('_method', method);
+  if (S.token) qs.set('token', S.token);
+
+  const res = await fetch(API_BASE + '?' + qs.toString(), {
+    method: 'POST',                                  // simple request: sin preflight CORS
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body || {}),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (res.status === 401 && S.token) clearSession();
-    throw new Error(data.error || ('Error ' + res.status));
+  const status = data && data.__status;
+  if (!res.ok || status >= 400) {
+    if (status === 401 && S.token) clearSession();
+    throw new Error((data && data.error) || ('Error ' + (status || res.status)));
   }
   return data;
+}
+
+/* ---------------- QR (generado en el navegador) ---------------- */
+function makeQrSvg(text) {
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    return qr.createSvgTag(5, 4).replace(/fill="black"/g, 'fill="#0f172a"');
+  } catch (e) {
+    return '';
+  }
 }
 
 function saveSession(token, user, table = null) {
@@ -841,7 +859,9 @@ async function loadQrCards() {
     const id = el.id.replace('qr-', '');
     try {
       if (!S.qrCache[id]) {
-        S.qrCache[id] = await api(`/tables/${encodeURIComponent(id)}/qr?token=${S.token}`);
+        const q = await api(`/tables/${encodeURIComponent(id)}/qr`);
+        q.svg = makeQrSvg(q.url);
+        S.qrCache[id] = q;
       }
       const q = S.qrCache[id];
       const holder = el.querySelector('.muted');
@@ -1274,11 +1294,12 @@ document.addEventListener('change', async e => {
 function startPoll() {
   stopPoll();
   S.poll = setInterval(() => {
+    if (document.hidden) return;                   // pestaña en segundo plano: no gastar cuota
     if (S.modalOpen) return;                       // no interrumpir modales
     const tag = document.activeElement?.tagName;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return; // no interrumpir escritura
     render().catch(() => {});
-  }, 6000);
+  }, 15000);
 }
 function stopPoll() { if (S.poll) clearInterval(S.poll); S.poll = null; }
 
