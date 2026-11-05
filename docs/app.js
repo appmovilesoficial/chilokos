@@ -855,13 +855,14 @@ async function loadQrCards() {
   if (!['encargado', 'dueno'].includes(S.user?.role)) return;
   S.qrCache = S.qrCache || {};
   const cards = [...document.querySelectorAll('[id^="qr-mesa"]')];
+  const base = location.origin + location.pathname.replace(/index\.html$/, '');
   for (const el of cards) {
     const id = el.id.replace('qr-', '');
     try {
       if (!S.qrCache[id]) {
-        const q = await api(`/tables/${encodeURIComponent(id)}/qr`);
-        q.svg = makeQrSvg(q.url);
-        S.qrCache[id] = q;
+        // La URL es determinista: no hace falta pedirla al backend.
+        const url = `${base}#/mesa/${encodeURIComponent(id)}`;
+        S.qrCache[id] = { url, svg: makeQrSvg(url) };
       }
       const q = S.qrCache[id];
       const holder = el.querySelector('.muted');
